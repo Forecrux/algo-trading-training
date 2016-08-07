@@ -1,12 +1,19 @@
-""" aaa
+
+# coding: utf-8
+
+# In[3]:
+
+"""
 Strategy
     Long entry
-        [over Fibonacci number] AND [rsi below 50] AND [price increase with volume high]
+        [over Fibonacci number] AND [rsi below 50] AND [price increase with volume high]                         
         OR
-        [candle stick (try bullish engulfing first)] AND [rsi below 50] AND [price increase with volume high]
+        [candle stick (try bullish engulfing first)] AND [rsi below 50] AND [price increase with volume high]  -----<done>
 
     Long exit
-        [highest price decrease 10%  (e.g. buy at $100, increase to $200, sell if $180)]
+        [highest price decrease 10%  (e.g. buy at $100, increase to $200, sell if $180)  ----- <done>
+        OR
+        [price increase with volume divergence]  ----- <done>
         OR
         [price increase with rsi divergence and low volume]
         OR
@@ -35,21 +42,25 @@ from pyalgotrade.technical import rsi
 import numpy
 import talib
 import decimal
+import numpy as np
 
+
+from zigzag import peak_valley_pivots, max_drawdown, compute_segment_returns, pivots_to_modes
 
 class MyStrategy(strategy.BacktestingStrategy):
     def __init__(self, feed, instrument, smaPeriod):
         strategy.BacktestingStrategy.__init__(self, feed, 1000)
         self.__position = None
         self.__instrument = instrument
-        self.setUseAdjustedValues(True)
+        self.setUseAdjustedValues(False)
         self.__rsi = rsi.RSI(feed[instrument].getCloseDataSeries(), 14)
         self.stoplossprice=0
         self.longprice=0
         self.profit=0
         self.win=0
         self.loss=0  
-
+        self.x = []
+        
     def onEnterOk(self, position):
         execInfo = position.getEntryOrder().getExecutionInfo()
         self.info("BUY at $%.2f" % (execInfo.getPrice()))
@@ -81,23 +92,43 @@ class MyStrategy(strategy.BacktestingStrategy):
         barDs = self.getFeed().getDataSeries("orcl")
         closeDs = self.getFeed().getDataSeries("orcl").getCloseDataSeries()
         volumeDs = self.getFeed().getDataSeries("orcl").getVolumeDataSeries()
-
-        #engulfing signal: engulfing where 100 for bullish engulfing;  -100 for bearish engulfing;   0 for no engulfing
+        #Long entry (2): engulfing signal: engulfing where 100 for bullish engulfing;  -100 for bearish engulfing;   0 for no engulfing
         engulfing = indicator.CDLENGULFING(barDs,50000)
         
         #recognize decreasing trend by previous 3 price and 3 volume
         trenddropprice = indicator.ROC(closeDs,50000,timeperiod=3)
         trenddropvol = indicator.ROC(volumeDs,50000,timeperiod=2)
     
-       
-        #Long exit (1): Edit the 90% price if price goes up
+        #Long exit (2): zigzag function to recognize divergence 
+        ##zigzag for Price
+        pivots = peak_valley_pivots(closeDs, 0.2, -0.2)
+        zigPrice = compute_segment_returns(np.array(closeDs), pivots)
+        
+        ##zigzag for Volume
+        pivotV = peak_valley_pivots(volumeDs, 0.2, -0.2)
+        zigVolume = compute_segment_returns(np.array(volumeDs), pivots)
+        
+        ##zigzag for RSI
+        ###create rsi series
+        if self.__rsi[-1] is None:
+            self.x=np.append(self.x,[50])
+        else:
+            self.x=np.append(self.x,self.__rsi[-1])
+        
+        pivotRSI = peak_valley_pivots(self.x, 0.2, -0.2)
+
+
+        zigVolume = compute_segment_returns(np.array(volumeDs), pivots)
+        zigRSI = compute_segment_returns(self.x, pivots)
+         
+        #Long exit (1) action: Edit the 90% price if price goes up
         if self.__position is not None and not self.__position.exitActive() and bar.getPrice()> (self.stoplossprice/0.9):
             self.stoplossprice=bar.getPrice()*0.9
         
         # If a position was not opened, check if we should enter a long position.
         if self.__position is None:
             
-            # Long entry (2): [candle stick (try bullish engulfing first)] AND [rsi below 50] AND [price increase with volume high]
+            # Long entry (2) action: [candle stick (try bullish engulfing first)] AND [rsi below 50] AND [price increase with volume high]
             # Enter a buy market order for 10 shares. The order is good till canceled.
             if engulfing[-1]==100 and trenddropprice[-2]<-2 and self.__rsi[-1]<50 and trenddropvol[-1]>0:
                 self.__position = self.enterLong(self.__instrument, 10, True)
@@ -105,9 +136,11 @@ class MyStrategy(strategy.BacktestingStrategy):
                 self.longprice=bar.getPrice()                #calculate profit only
             
         # Check if we have to exit the position.
-        # Long exit (1) AND Stop Long loss
-        elif not self.__position.exitActive() and bar.getPrice() < self.stoplossprice:
+        #                                         Long exit (1) action AND Stop Long loss   Long exit (2)
+        elif not self.__position.exitActive() and (bar.getPrice() < self.stoplossprice or (zigPrice[-1]>0 and zigVolume[-1]<=0)):
             self.__position.exitMarket()
+        
+   
 
         
 def run_strategy(smaPeriod):
@@ -128,6 +161,10 @@ def run_strategy(smaPeriod):
 
 run_strategy(15)
 
+                             
+
+
+# In[ ]:
 
 
 
